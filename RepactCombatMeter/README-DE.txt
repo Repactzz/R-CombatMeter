@@ -52,33 +52,3 @@ Raid liefert ein eindeutiges Abschlussereignis; dann wird beim
 Verlassen zurückgesetzt. Ein einzelner Bosskill setzt NICHT den
 gesamten Raid zurück. Instanzwechsel werden nach Ladebildschirm
 kurz verzögert geprüft.
-
-WICHTIG: Die API ResetAllCombatSessions löscht die gemeinsame
-Blizzard-Datenquelle, nicht nur die Repact-Anzeigen. Andere
-Damage Meter, die dieselbe Quelle verwenden, sind betroffen.
-Wer das nicht möchte, kann Auto-Reset im Guide ausschalten.
-
-CLIENT-EINSCHRÄNKUNGEN
-WoW Forever schützt bestimmte Kampfdaten. Das Addon nutzt die
-offizielle Schnittstelle C_DamageMeter, keine Combat-Log-Hooks.
-Geheime Zahlen können nur direkt in unterstützten UI-Elementen
-angezeigt werden. Prozentanteile erscheinen deshalb nur, wenn
-die zugrunde liegenden Zahlen für Addons lesbar sind (in der
-Regel nach dem Kampf). Ein Strich kennzeichnet nicht berechenbare
-Werte. Die Rangfolge stammt vom Client. Während geschützter
-Kämpfe können Zahlen als ungekürzte Ganzzahlen erscheinen.
-Wenn keine Daten erscheinen, aktiviere das integrierte Damage
-Meter in den WoW-Spieloptionen. Es ist möglich, dass das
-Blizzard-Fenster dadurch zusätzlich sichtbar wird.
-
-TESTSTATUS
-Lua-Syntaxprüfung und lokaler simulierter API-/UI-Test bestanden:
-Ersteinrichtung, Damage-Prozentanteile, Healing, Overall,
-Fenster hinzufügen, Gruppensperre, Reset bei Instanzwechsel,
-Combat-Reset-Aufschub und Fenster ein-/ausblenden.
-Nicht in einem laufenden WoW-Forever-Client getestet. Es handelt
-sich um eine erste installierbare Version.
-
-API-Referenz:
-https://warcraft.wiki.gg/wiki/API_C_DamageMeter.GetCombatSessionFromType
-https://github.com/Atraeau/WoW-Addons/blob/main/docs/api/Items-Inventory/C_DamageMeter.md
