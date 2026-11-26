@@ -1,0 +1,7 @@
+## Interface: 16001
+## Title: |cff59d8c6R-CombatMeter|r
+## Notes: Modern damage and healing meter for WoW Forever.
+## Author: Repact
+## Version: 1.0.1
+## SavedVariablesPerCharacter: RCombatMeterDB
+Main.lua

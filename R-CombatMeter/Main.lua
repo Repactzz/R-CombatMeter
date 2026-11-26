@@ -19,7 +19,7 @@ local function clamp(n,a,b) return math.max(a,math.min(b,n)) end
 local function secret(v) return issecretvalue and issecretvalue(v) or false end
 local function readable(v) return not secret(v) and v ~= nil end
 local function num(v) return readable(v) and type(v)=="number" end
-local function msg(s) print("|cff59d8c6Repact Meter|r: "..s) end
+local function msg(s) print("|cff59d8c6R-CombatMeter|r: "..s) end
 local function rect(parent, layer, r,g,b,a)
     local t=parent:CreateTexture(nil,layer or "BACKGROUND")
     t:SetColorTexture(r,g,b,a or 1); return t
@@ -123,7 +123,7 @@ local function addWindow(id,mode,attach)
     makeWindow(i); layout(); refresh()
 end
 local function closeWindow(id)
-    if count()==1 then msg("Letztes Fenster bleibt erhalten. /rpm hide blendet alle aus."); return end
+    if count()==1 then msg("Letztes Fenster bleibt erhalten. /rcm hide blendet alle aus."); return end
     local c=db.windows[id]; local nextID=child(id)
     if nextID then
         savePos(nextID); db.windows[nextID].parent=c.parent; db.windows[nextID].locked=locked(id)
@@ -297,7 +297,7 @@ local function stopMove(id)
 end
 makeWindow=function(id)
     if windows[id] then return end
-    local f=CreateFrame("Frame","RepactCombatMeterWindow"..id,UIParent)
+    local f=CreateFrame("Frame","RCombatMeterWindow"..id,UIParent)
     windows[id]=f; f.id=id; f.rows={}; f.offset=0
     f:SetFrameStrata("MEDIUM"); f:SetMovable(true); f:SetResizable(true); f:SetClampedToScreen(true)
     if f.SetResizeBounds then f:SetResizeBounds(MINW,TOP+ROW+FOOT,MAXW,TOP+ROW*MAXROWS+FOOT) end
@@ -418,7 +418,7 @@ showMenu=function(anchor,id,kind)
         item("Fenster schließen",function() closeWindow(id) end)
         item("Guide / Einstellungen",showGuide)
         item("Alle Kampfdaten zurücksetzen",function()
-            if StaticPopup_Show then StaticPopup_Show("REPACT_METER_RESET") else requestReset("manuell") end
+            if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset("manuell") end
         end)
     end
     for _,b in ipairs(menu.items) do b:Hide() end
@@ -452,16 +452,16 @@ end
 showGuide=function()
     if menu then menu:Hide() end
     if not guide then
-        guide=CreateFrame("Frame","RepactCombatMeterGuide",UIParent)
+        guide=CreateFrame("Frame","RCombatMeterGuide",UIParent)
         guide:SetSize(540,492); guide:SetPoint("CENTER"); guide:SetFrameStrata("DIALOG"); guide:SetClampedToScreen(true)
         guide:EnableMouse(true); guide:SetMovable(true); guide:RegisterForDrag("LeftButton")
         guide:SetScript("OnDragStart",guide.StartMoving); guide:SetScript("OnDragStop",guide.StopMovingOrSizing)
         local bg=rect(guide,"BACKGROUND",.055,.072,.095,.99); bg:SetAllPoints()
         border(guide,.25,.43,.45,1)
         local line=rect(guide,"ARTWORK",ACC[1],ACC[2],ACC[3],1); line:SetPoint("TOPLEFT",1,-1); line:SetPoint("TOPRIGHT",-1,-1); line:SetHeight(3)
-        local kicker=label(guide,11,ACC[1],ACC[2],ACC[3]); kicker:SetPoint("TOPLEFT",22,-19); kicker:SetText("REPACT  /  COMBAT METER")
+        local kicker=label(guide,11,ACC[1],ACC[2],ACC[3]); kicker:SetPoint("TOPLEFT",22,-19); kicker:SetText("R-COMBATMETER")
         local title=label(guide,24,1,1,1); title:SetPoint("TOPLEFT",22,-40); title:SetText("Dein Kampf. Dein Layout.")
-        local sub=label(guide,12,.64,.74,.80); sub:SetPoint("TOPLEFT",22,-78); sub:SetText("WoW Forever  •  Setup Guide  •  Version 1.0.0")
+        local sub=label(guide,12,.64,.74,.80); sub:SetPoint("TOPLEFT",22,-78); sub:SetText("WoW Forever  •  Setup Guide  •  Version 1.0.1")
         local function paragraph(y,titleText,body)
             local t=label(guide,13,ACC[1],ACC[2],ACC[3]); t:SetPoint("TOPLEFT",22,-y); t:SetText(titleText)
             local p=label(guide,12,.82,.87,.91); p:SetWordWrap(true); p:SetJustifyV("TOP"); p:SetPoint("TOPLEFT",22,-y-22); p:SetWidth(496); p:SetText(body)
@@ -489,8 +489,8 @@ showGuide=function()
     guide:Show()
 end
 local function init()
-    RepactCombatMeterDB=RepactCombatMeterDB or {}
-    db=RepactCombatMeterDB
+    RCombatMeterDB=RCombatMeterDB or {}
+    db=RCombatMeterDB
     db.windows=db.windows or {}; db.nextID=db.nextID or 0
     if db.autoReset==nil then db.autoReset=true end
     lastZone=db.lastZone
@@ -507,7 +507,7 @@ local function init()
         layout()
     end
     if StaticPopupDialogs then
-        StaticPopupDialogs.REPACT_METER_RESET={
+        StaticPopupDialogs.RCOMBATMETER_RESET={
             text="Alle Kampfdaten zurücksetzen? Dies betrifft auch das eingebaute Damage Meter und andere Addons, die dieselben Daten nutzen.",
             button1="Zurücksetzen",button2="Abbrechen",timeout=0,whileDead=true,hideOnEscape=true,
             OnAccept=function() requestReset("manuell") end,
@@ -516,14 +516,13 @@ local function init()
     if not db.guideDone then demo=true; showGuide() end
     refresh()
 end
-SLASH_REPACTCOMBATMETER1="/rpm"
-SLASH_REPACTCOMBATMETER2="/repactmeter"
-SlashCmdList.REPACTCOMBATMETER=function(command)
+SLASH_RCOMBATMETER1="/rcm"
+SlashCmdList.RCOMBATMETER=function(command)
     if not db then return end
     local cmd=command:lower():match("^%s*(%S*)") or ""
     if cmd=="hide" then db.hidden=not db.hidden; layout(); refresh()
     elseif cmd=="demo" then demo=not demo; refresh()
-    elseif cmd=="reset" then if StaticPopup_Show then StaticPopup_Show("REPACT_METER_RESET") else requestReset("manuell") end
+    elseif cmd=="reset" then if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset("manuell") end
     elseif cmd=="lock" then
         local a=ids(); local state=not locked(a[1])
         for _,id in ipairs(a) do if root(id)==id then db.windows[id].locked=state end end

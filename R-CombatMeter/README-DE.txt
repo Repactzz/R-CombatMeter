@@ -1,12 +1,12 @@
-REPACT COMBAT METER  |  v1.0.0
+R-CombatMeter  |  v1.0.1
 WoW Forever 1.60.1 / Interface 16001
 ==================================
 
 INSTALLATION
 1. ZIP entpacken.
-2. Den Ordner RepactCombatMeter nach
+2. Den Ordner R-CombatMeter nach
    World of Warcraft\_forever_\Interface\AddOns\ kopieren.
-   Die .toc-Datei muss direkt in RepactCombatMeter liegen,
+   Die .toc-Datei muss direkt in R-CombatMeter liegen,
    nicht in einem zusätzlichen Unterordner.
 3. WoW starten, Addon aktivieren oder /reload eingeben.
 4. Beim ersten Laden öffnet sich der Setup-Guide.
@@ -33,12 +33,11 @@ BEDIENUNG
   Einstellungen bleiben je Charakter gespeichert.
 
 CHATBEFEHLE
-/rpm        Guide erneut öffnen
-/rpm demo   Beispieldaten ein- oder ausschalten
-/rpm hide   alle Fenster ein- oder ausblenden
-/rpm lock   sämtliche Gruppen sperren / entsperren
-/rpm reset  gemeinsame Kampfdaten nach Bestätigung löschen
-/repactmeter ist ein Alias für /rpm.
+/rcm        Guide erneut öffnen
+/rcm demo   Beispieldaten ein- oder ausschalten
+/rcm hide   alle Fenster ein- oder ausblenden
+/rcm lock   sämtliche Gruppen sperren / entsperren
+/rcm reset  gemeinsame Kampfdaten nach Bestätigung löschen
 
 AUTOMATIK
 Die Current-Session des Forever-Clients trennt die Kämpfe.
