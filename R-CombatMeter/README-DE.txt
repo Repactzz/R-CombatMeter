@@ -1,4 +1,4 @@
-R-CombatMeter  |  v1.0.1
+R-CombatMeter  |  v1.0.5
 WoW Forever 1.60.1 / Interface 16001
 ==================================
 
@@ -12,25 +12,35 @@ INSTALLATION
 4. Beim ersten Laden öffnet sich der Setup-Guide.
    Wähle das Layout und klicke auf FERTIG / SPIELEN.
 
+SPRACHE
+Deutsch bei deutschem WoW-Client, sonst Englisch.
+Die Sprache wird beim Laden automatisch erkannt.
+
 BEDIENUNG
 - Modus im Header wählen:
-  Damage Done            = aktueller Kampf, Schaden und DPS
-  Damage Done Overall    = gesamter Schaden und Gesamt-DPS
-  Healing Done           = aktueller Kampf, Heilung und HPS
-  Healing Done Overall   = gesamte Heilung und Gesamt-HPS
-- + öffnet die Window Control. Neues Fenster frei oder direkt
-  unterhalb der Gruppe anlegen. Bis zu 12 Fenster.
+  Schaden                = aktueller Kampf, Schaden und DPS
+  Schaden gesamt         = gesamter Schaden und Gesamt-DPS
+  Heilung                = aktueller Kampf, Heilung und HPS
+  Heilung gesamt         = gesamte Heilung und Gesamt-HPS
+- + öffnet die Window Control. Freie Fenster erscheinen mittig auf dem Bildschirm.
+  Verbundene Fenster werden direkt oberhalb des gewählten Fensters eingefügt. Bis zu 12 Fenster.
 - Header ziehen, um ein Fenster bzw. seine Gruppe zu bewegen.
-  Eine freie Gruppe nahe unter eine andere ziehen, um sie
-  automatisch anzudocken, oder über das + Menü anhängen.
-- L/U im Header sperrt / entsperrt die ganze Fenstergruppe
-  (U = unlocked, L = locked).
+  Eine freie Gruppe nahe über oder unter eine andere ziehen.
+  Der leuchtende Spalt zeigt die Andockposition vor dem Loslassen.
+  Nach dem Andocken verschwindet der leuchtende Spalt.
+  Alternativ über das + Menü anhängen.
+- Das Schlosssymbol sperrt oder entsperrt die ganze Fenstergruppe.
 - Untere rechte Ecke im entsperrten Zustand ziehen:
-  Höhe (1 bis 40 Zeilen) und Breite ändern.
+  Höhe und Breite aller verbundenen Fenster gleichzeitig ändern.
+  Die Zeilenzahl wird an die verfügbare Bildschirmhöhe angepasst.
+- Schriftrollen-Icon im Header: verfügbare Kämpfe auswählen; Live kehrt zur aktuellen Anzeige zurück.
+  Der Verlauf enthält die vom Spiel gespeicherten Sitzungen bis zum Reset.
+- Im Guide lassen sich Akzent- und Headerfarbe per Farbauswahl einstellen.
+- Die animierte Demo-Vorschau simuliert wechselnde Ranglisten und Balken.
 - Mausrad über dem Meter: weitere Spieler anzeigen.
 - Türkiser Markierungsstrich: eigener Charakter.
 - Positionen, Modi, Größen, Verknüpfungen, Sperren und
-  Einstellungen bleiben je Charakter gespeichert.
+  Einstellungen bleiben je Charakter gespeichert, auch nach /reload.
 
 CHATBEFEHLE
 /rcm        Guide erneut öffnen

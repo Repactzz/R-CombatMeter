@@ -1,20 +1,29 @@
-local ADDON = ...
+local ADDON, NS = ...
+local L = NS.L
 local unpack = unpack or table.unpack
 local db, guide, menu
 local windows = {}
 local live, pendingReset, lastZone, resetReason, resetRetry = false, false, nil, nil, 0
 local demo = false
+local demoClock=0
+local historyPage=1
 local TEX = "Interface\\Buttons\\WHITE8X8"
 local ACC = {0.35, 0.86, 0.78}
+local HEADER = {.075,.105,.13}
+local DEFAULT_ACC={.35,.86,.78}; local DEFAULT_HEADER={.075,.105,.13}
 local MODES = {
-    {title="Damage Done", short="DMG / FIGHT", amount="DMG", rate="DPS", session=1, kind=0},
-    {title="Damage Done Overall", short="DMG / RUN", amount="DMG", rate="DPS", session=0, kind=0},
-    {title="Healing Done", short="HEAL / FIGHT", amount="HEAL", rate="HPS", session=1, kind=2},
-    {title="Healing Done Overall", short="HEAL / RUN", amount="HEAL", rate="HPS", session=0, kind=2},
+    {title=L.DAMAGE, short=L.DMG_FIGHT, amount=L.DMG, rate="DPS", session=1, kind=0},
+    {title=L.DAMAGE_OVERALL, short=L.DMG_RUN, amount=L.DMG, rate="DPS", session=0, kind=0},
+    {title=L.HEALING, short=L.HEAL_FIGHT, amount=L.HEAL, rate="HPS", session=1, kind=2},
+    {title=L.HEALING_OVERALL, short=L.HEAL_RUN, amount=L.HEAL, rate="HPS", session=0, kind=2},
 }
 local ROW, TOP, FOOT, GAP = 25, 57, 23, 5
 local MINW, MAXW, MAXROWS, MAXWINDOWS = 390, 760, 40, 12
 local refresh, layout, showMenu, showGuide, makeWindow
+local draggingRoot, resizeDrag, dockPreview, dragState
+local cursorUI
+local layoutPending=false
+local lastLayoutWidth,lastLayoutHeight
 local function clamp(n,a,b) return math.max(a,math.min(b,n)) end
 local function secret(v) return issecretvalue and issecretvalue(v) or false end
 local function readable(v) return not secret(v) and v ~= nil end
@@ -54,6 +63,42 @@ local function button(parent, text, w,h, fn, tip)
     b:SetScript("OnLeave",function(self) self.bg:SetColorTexture(.13,.17,.20,.95); GameTooltip:Hide() end)
     return b
 end
+local function createLockIcon(b)
+    b.t:Hide()
+    local icon=CreateFrame("Frame",nil,b)
+    icon:SetSize(16,16); icon:SetPoint("CENTER"); icon:EnableMouse(false)
+    local function piece(x,y,w,h)
+        local t=rect(icon,"ARTWORK",1,1,1,1)
+        t:SetPoint("TOPLEFT",icon,"TOPLEFT",x,-y); t:SetSize(w,h)
+        return t
+    end
+    b.lockIcon={body=piece(2,7,12,8),top=piece(5,1,7,2),
+        left=piece(4,2,2,6),right=piece(11,2,2,6),
+        openSide=piece(11,2,2,3)}
+    local key=rect(icon,"OVERLAY",.075,.105,.13,1)
+    key:SetPoint("TOPLEFT",icon,"TOPLEFT",7,-9); key:SetSize(2,4)
+end
+local function paintLock(b,isLocked)
+    local l=b.lockIcon
+    local r,g,bl=.82,.87,.91
+    if isLocked then r,g,bl=ACC[1],ACC[2],ACC[3] end
+    for _,t in pairs(l) do t:SetColorTexture(r,g,bl,1) end
+    l.top:Show(); l.left:Show()
+    l.right:SetShown(isLocked); l.openSide:SetShown(not isLocked)
+end
+local function createHistoryIcon(b)
+    b.t:Hide()
+    local icon=CreateFrame("Frame",nil,b)
+    icon:SetSize(16,16); icon:SetPoint("CENTER"); icon:EnableMouse(false)
+    local function piece(x,y,w,h,r,g,bl)
+        local t=rect(icon,"ARTWORK",r,g,bl,1)
+        t:SetPoint("TOPLEFT",icon,"TOPLEFT",x,-y); t:SetSize(w,h)
+        return t
+    end
+    b.paper=piece(3,1,10,14,.73,.83,.88)
+    piece(1,1,5,3,.88,.93,.96); piece(10,12,5,3,.88,.93,.96)
+    piece(5,5,6,1,.13,.20,.25); piece(5,8,6,1,.13,.20,.25)
+end
 local function newConfig(mode,x,y,parent)
     db.nextID=db.nextID+1
     local id=db.nextID
@@ -79,51 +124,177 @@ local function tail(id)
     return i
 end
 local function locked(id) return db.windows[root(id)].locked end
-local function savePos(id)
+-- Positions belong exclusively to the addon; never persist a temporary
+-- UI screen clamp during startup, reload or a scale change.
+local function screenSize()
+    local w,h=UIParent:GetWidth(),UIParent:GetHeight()
+    if type(w)=="number" and type(h)=="number" and w>=MINW and h>=TOP+ROW+FOOT
+        and UIParent:GetLeft() and UIParent:GetTop() then return w,h end
+end
+local function displayedPos(id)
     local f=windows[id]
-    if not f or not f:GetLeft() or not f:GetTop() then return end
-    local c=db.windows[id]
-    c.x=f:GetLeft()-UIParent:GetLeft()
-    c.y=f:GetTop()-UIParent:GetTop()
+    if not f or not f:GetLeft() or not f:GetTop() or not screenSize() then return end
+    return f:GetLeft()-UIParent:GetLeft(),f:GetTop()-UIParent:GetTop()
+end
+local function savePos(id)
+    local x,y=displayedPos(id)
+    if x then local c=db.windows[id]; c.x=x; c.y=y end
 end
 local function separate(id)
     if not db.windows[id].parent then return end
     savePos(id); db.windows[id].locked=locked(id); db.windows[id].parent=nil
     layout()
 end
-local function dock(id,target)
-    local r=root(id); local t=tail(target)
-    if r==root(t) or locked(r) then return end
-    db.windows[r].parent=t
-    layout()
+local function groupMembers(id)
+    local r=root(id); local members={}
+    for _,i in ipairs(ids()) do if root(i)==r then members[#members+1]=i end end
+    return members
 end
-local function snap(id)
-    local f=windows[id]
-    if locked(id) then return end
-    local best, dist
-    local top=f:GetTop(); local left=f:GetLeft()
-    if not top or not left then return end
+local function setGroupSize(id,width,rows,fitScreen)
+    local members=groupMembers(id)
+    width=clamp(width,MINW,MAXW)
+    local limit=MAXROWS
+    local _,h=screenSize()
+    if fitScreen~=false and h then
+        limit=math.max(1,math.min(MAXROWS,math.floor((h-(#members-1)*GAP-#members*(TOP+FOOT))/(#members*ROW))))
+    end
+    rows=clamp(math.floor(rows+.5),1,limit)
+    for _,i in ipairs(members) do
+        db.windows[i].width=width
+        db.windows[i].rows=rows
+    end
+    return width,rows
+end
+local function groupHeight(id)
+    local n=#groupMembers(id)
+    return n*(TOP+db.windows[root(id)].rows*ROW+FOOT)+(n-1)*GAP
+end
+local function dock(id,target,side)
+    local r,t=root(id),root(target)
+    if r==t or locked(r) then return false end
+    local tc=db.windows[t]
+    local tx,ty=displayedPos(t)
+    if not tx then tx,ty=tc.x,tc.y end
+    local lock=tc.locked
+    local width,rows=tc.width,tc.rows
+    local movingCount=#groupMembers(r)
+    if side=="above" then
+        local last=tail(r)
+        db.windows[t].parent=last
+        db.windows[r].locked=lock
+        setGroupSize(r,width,rows)
+        db.windows[r].x=tx
+        db.windows[r].y=ty+movingCount*(TOP+db.windows[r].rows*ROW+FOOT+GAP)
+    else
+        db.windows[r].parent=tail(t)
+        setGroupSize(t,width,rows)
+    end
+    layout(); refresh()
+    return true
+end
+-- Only free ends of distinct vertical groups may join; use the same
+-- candidate for the preview and the final drop.
+local function findDock(id)
+    if locked(id) or db.hidden then return end
+    local r=root(id)
+    local first,last=windows[r],windows[tail(r)]
+    if not first or not last then return end
+    local ml,mr,mt,mb=first:GetLeft(),first:GetRight(),first:GetTop(),last:GetBottom()
+    if not ml or not mr or not mt or not mb then return end
+    local best,side,score
+    local function consider(i,d,v)
+        if not score or v<score then best,side,score=i,d,v end
+    end
     for _,i in ipairs(ids()) do
-        if root(i)~=id and not child(i) then
-            local a=windows[i]
-            if a and a:IsShown() and a:GetBottom() and a:GetLeft() then
-                local dx=math.abs(left-a:GetLeft()); local dy=math.abs(top-a:GetBottom()-(-GAP))
-                if dx<42 and dy<26 and (not dist or dx+dy<dist) then best,dist=i,dx+dy end
+        if root(i)==i and i~=r then
+            local a,b=windows[i],windows[tail(i)]
+            if a and b and a:IsShown() and b:IsShown() then
+                local al,ar,at,ab=a:GetLeft(),a:GetRight(),a:GetTop(),b:GetBottom()
+                if al and ar and at and ab then
+                    local overlap=math.min(mr,ar)-math.max(ml,al)
+                    local dx=math.abs(ml-al)
+                    if overlap>=math.min(mr-ml,ar-al)*.45 then
+                        local above=math.abs(mb-at-GAP)
+                        local below=math.abs(mt-ab+GAP)
+                        if above<=38 then consider(i,"above",above+dx*.15) end
+                        if below<=38 then consider(i,"below",below+dx*.15) end
+                        -- Deliberate overlap: pick the nearest group end even
+                        -- if the moving window is directly on the target.
+                        local vertical=math.min(mt,at)-math.max(mb,ab)
+                        if vertical>0 then
+                            local up=(mt+mb)>=(at+ab)
+                            consider(i,up and "above" or "below",100+math.min(above,below)+dx*.15)
+                        end
+                    end
+                end
             end
         end
     end
-    if best then dock(id,best) end
+    return best,side
+end
+local function hideDockPreview()
+    if dockPreview then dockPreview:Hide() end
+end
+local function showDockPreview(target,side)
+    if not target then hideDockPreview(); return end
+    local targetFrame=windows[side=="above" and root(target) or tail(target)]
+    if not dockPreview then
+        dockPreview=CreateFrame("Frame",nil,UIParent)
+        dockPreview:SetFrameStrata("HIGH"); dockPreview:EnableMouse(false)
+        local halo=rect(dockPreview,"BACKGROUND",ACC[1],ACC[2],ACC[3],.24); dockPreview.halo=halo
+        halo:SetAllPoints()
+        local inner=rect(dockPreview,"ARTWORK",ACC[1],ACC[2],ACC[3],.55); dockPreview.inner=inner
+        inner:SetPoint("LEFT"); inner:SetPoint("RIGHT"); inner:SetHeight(6)
+        local core=rect(dockPreview,"OVERLAY",ACC[1],ACC[2],ACC[3],1); dockPreview.core=core
+        core:SetPoint("LEFT"); core:SetPoint("RIGHT"); core:SetHeight(2)
+    end
+    dockPreview.halo:SetColorTexture(ACC[1],ACC[2],ACC[3],.24)
+    dockPreview.inner:SetColorTexture(ACC[1],ACC[2],ACC[3],.55)
+    dockPreview.core:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+    dockPreview:ClearAllPoints()
+    local y=side=="above" and GAP/2 or -GAP/2
+    local edge=side=="above" and "TOP" or "BOTTOM"
+    dockPreview:SetPoint("LEFT",targetFrame,edge.."LEFT",0,y)
+    dockPreview:SetPoint("RIGHT",targetFrame,edge.."RIGHT",0,y)
+    dockPreview:SetHeight(12); dockPreview:Show()
 end
 local function count() local n=0 for _ in pairs(db.windows) do n=n+1 end return n end
 local function addWindow(id,mode,attach)
-    if count()>=MAXWINDOWS then msg("Maximal "..MAXWINDOWS.." Fenster."); return end
-    local c=db.windows[id]; local parent=attach and tail(id) or nil
-    local i=newConfig(mode,c.x+35,c.y-35,parent)
-    if attach then db.windows[i].width=db.windows[parent].width end
+    if count()>=MAXWINDOWS then msg(L.MAX_WINDOWS_PREFIX..MAXWINDOWS..L.MAX_WINDOWS_SUFFIX); return end
+    local c=db.windows[id]
+    local i
+    if attach then
+        local r=root(id)
+        local rc=db.windows[r]
+        local x,y=displayedPos(r)
+        if not x then x,y=rc.x,rc.y end
+        -- Insert directly above the invoking window, not at the group's tail.
+        i=newConfig(mode,x,y,c.parent)
+        local new=db.windows[i]
+        new.width,new.rows,new.locked=rc.width,rc.rows,rc.locked
+        c.parent=i
+        local newRoot=root(i)
+        setGroupSize(newRoot,new.width,new.rows)
+        local top=db.windows[newRoot]
+        top.x=x
+        -- Grow upwards to retain the invoking window's existing position
+        -- and the windows below it when space permits.
+        top.y=y+TOP+top.rows*ROW+FOOT+GAP
+    else
+        local w,h=screenSize()
+        i=newConfig(mode,0,0,nil)
+        local new=db.windows[i]
+        if w then
+            new.x=(w-new.width)/2
+            new.y=-(h-(TOP+new.rows*ROW+FOOT))/2
+        else
+            new.centerOnLayout=true
+        end
+    end
     makeWindow(i); layout(); refresh()
 end
 local function closeWindow(id)
-    if count()==1 then msg("Letztes Fenster bleibt erhalten. /rcm hide blendet alle aus."); return end
+    if count()==1 then msg(L.LAST_WINDOW); return end
     local c=db.windows[id]; local nextID=child(id)
     if nextID then
         savePos(nextID); db.windows[nextID].parent=c.parent; db.windows[nextID].locked=locked(id)
@@ -220,23 +391,45 @@ local function updateWindow(f,data,active)
     end
     for i=c.rows+1,#f.rows do f.rows[i]:Hide() end
     f.empty:SetShown(n==0)
-    f.empty:SetText(demo and "Keine Beispieldaten" or (not C_DamageMeter and "Damage-Meter-API nicht verfügbar" or "Bereit - warte auf Kampfdaten"))
-    f.state:SetText(demo and "DEMO" or (active and "LIVE" or "BEREIT"))
+    f.empty:SetText(demo and L.NO_DEMO or (not C_DamageMeter and L.NO_API or L.WAIT_DATA))
+    f.state:SetText(demo and "DEMO" or (active and "LIVE" or L.READY))
     f.state:SetTextColor(active and .40 or .62,active and .92 or .70,active and .79 or .77)
-    local shown=n>0 and string.format("%d-%d / %d",f.offset+1,math.min(n,f.offset+c.rows),n) or "0 Spieler"
-    f.footer:SetText(shown..(active and "  |  Prozent ggf. nach Kampf" or ""))
+    local shown=n>0 and string.format("%d-%d / %d",f.offset+1,math.min(n,f.offset+c.rows),n) or L.ZERO_PLAYERS
+    f.footer:SetText(shown..(active and L.PERCENT_HINT or ""))
     local duration=data and data.durationSeconds
     if num(duration) then f.timer:SetFormattedText("%02d:%02d",math.floor(duration/60),math.floor(duration%60)) else f.timer:SetText(mode.short) end
 end
 local DEMO_CLASSES={"PALADIN","ROGUE","MAGE","WARRIOR","HUNTER","PRIEST","DRUID","SHAMAN"}
 local DEMO_NAMES={"Repact","Fenrir","Wilmer","Eure","Astra","Lunaris","Thorn","Zephyr"}
+local function availableHistory()
+    local entries={}
+    if not C_DamageMeter or not C_DamageMeter.GetAvailableCombatSessions then return entries end
+    local ok,list=pcall(C_DamageMeter.GetAvailableCombatSessions)
+    if not ok or secret(list) or type(list)~="table" then return entries end
+    for _,session in ipairs(list) do
+        if not secret(session) and type(session)=="table" then
+            local id,name=session.sessionID,session.name
+            if num(id) then
+                if not readable(name) or type(name)~="string" or name=="" then name=L.FIGHT_NUMBER..id end
+                entries[#entries+1]={id=id,name=name}
+            end
+        end
+    end
+    table.sort(entries,function(a,b) return a.id>b.id end)
+    return entries
+end
 local function demoData(m)
-    local d={combatSources={},maxAmount=0,totalAmount=0,durationSeconds=92}
+    local t=demoClock%64+1
+    local d={combatSources={},maxAmount=0,totalAmount=0,durationSeconds=t}
     for i=1,8 do
-        local amount=math.floor((9-i)^1.4*8100*(m==2 and 4 or m>=3 and .42 or 1))
-        d.combatSources[i]={name=DEMO_NAMES[i],classFilename=DEMO_CLASSES[i],totalAmount=amount,amountPerSecond=amount/92,isLocalPlayer=i==1}
+        local phase=i*1.75
+        local weight=1+0.05*(9-i)
+        local amount=math.floor((t*weight + 5*(math.cos(phase)-math.cos(t*.22+phase)))*1200*(m==2 and 4 or m>=3 and .42 or 1))
+        amount=math.max(1,amount)
+        d.combatSources[i]={name=DEMO_NAMES[i],classFilename=DEMO_CLASSES[i],totalAmount=amount,amountPerSecond=amount/t,isLocalPlayer=i==1}
         d.maxAmount=math.max(d.maxAmount,amount); d.totalAmount=d.totalAmount+amount
     end
+    table.sort(d.combatSources,function(a,b) return a.totalAmount>b.totalAmount end)
     return d
 end
 refresh=function()
@@ -244,22 +437,41 @@ refresh=function()
     local cache={}
     for id,f in pairs(windows) do
         if f:IsShown() then
-            local m=db.windows[id].mode; local data=cache[m]
+            local m=db.windows[id].mode; local key=f.historyID and (m..":"..f.historyID) or m; local data=cache[key]
             if data==nil then
-                if demo then data=demoData(m)
+                if f.historyID then
+                    if C_DamageMeter and C_DamageMeter.GetCombatSessionFromID then
+                        local ok,v=pcall(C_DamageMeter.GetCombatSessionFromID,f.historyID,MODES[m].kind)
+                        if ok and not secret(v) then data=v end
+                    end
+                elseif demo then data=demoData(m)
                 elseif C_DamageMeter and C_DamageMeter.GetCombatSessionFromType then
                     local a=MODES[m]
                     local ok,v=pcall(C_DamageMeter.GetCombatSessionFromType,a.session,a.kind)
                     if ok then data=v end
                 end
-                cache[m]=data or false
+                cache[key]=data or false
             end
-            updateWindow(f,data or nil,live and not demo)
+            updateWindow(f,data or nil,live and not demo and not f.historyID)
+            if not f.historyID then f.mode.t:SetText(MODES[m].title.."  v") end
+            if f.historyID then
+                f.state:SetText("HIST."); f.state:SetTextColor(ACC[1],ACC[2],ACC[3])
+                f.mode.t:SetText((MODES[m].kind==0 and L.DAMAGE or L.HEALING).."  v")
+                f.footer:SetText(f.historyName or L.HISTORY)
+                if not data then f.empty:SetText(L.FIGHT_UNAVAILABLE) end
+            end
         end
     end
 end
 layout=function()
     if not db then return end
+    local w,h=screenSize()
+    if not w then layoutPending=true; return end
+    layoutPending=false
+    lastLayoutWidth,lastLayoutHeight=w,h
+    for _,id in ipairs(ids()) do
+        if root(id)==id then local c=db.windows[id]; setGroupSize(id,c.width,c.rows,false) end
+    end
     local function place(id,seen)
         if seen[id] then return end
         seen[id]=true
@@ -271,76 +483,138 @@ layout=function()
             if not f.rows[i] then f.rows[i]=createRow(f,i) end
             local r=f.rows[i]; r:ClearAllPoints(); r:SetPoint("TOPLEFT",f,"TOPLEFT",6,-TOP-(i-1)*ROW); r:SetPoint("TOPRIGHT",f,"TOPRIGHT",-6,-TOP-(i-1)*ROW)
         end
-        f:ClearAllPoints()
+        if not f.moving then f:ClearAllPoints() end
         if c.parent and windows[c.parent] then
             f:SetPoint("TOPLEFT",windows[c.parent],"BOTTOMLEFT",0,-GAP)
-        else
-            c.x=clamp(c.x,0,math.max(0,UIParent:GetWidth()-c.width)); c.y=clamp(c.y,-math.max(0,UIParent:GetHeight()-f:GetHeight()),0)
-            f:SetPoint("TOPLEFT",UIParent,"TOPLEFT",c.x,c.y)
+        elseif not f.moving then
+            if c.centerOnLayout then
+                c.x=(w-c.width)/2; c.y=-(h-groupHeight(id))/2
+                c.centerOnLayout=nil
+            end
+            local x=clamp(c.x,0,math.max(0,w-c.width))
+            local y=clamp(c.y,-math.max(0,h-groupHeight(id)),0)
+            f:SetPoint("TOPLEFT",UIParent,"TOPLEFT",x,y)
         end
         local m=MODES[c.mode]
         f.mode.t:SetText(m.title.."  v"); f.amountHead:SetText(m.amount); f.rateHead:SetText(m.rate)
-        f.lock.t:SetText(locked(id) and "L" or "U")
-        f.lock.t:SetTextColor(locked(id) and .36 or .85,locked(id) and .86 or .86,locked(id) and .78 or .86)
+        paintLock(f.lock,locked(id))
+        f.accent:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+        f.brand:SetTextColor(ACC[1],ACC[2],ACC[3])
+        f.headBg:SetColorTexture(HEADER[1],HEADER[2],HEADER[3],1)
+        for _,row in ipairs(f.rows) do row.mark:SetColorTexture(ACC[1],ACC[2],ACC[3],1) end
         f.resize:SetShown(not locked(id))
         f:EnableMouseWheel(true); f:SetShown(not db.hidden)
     end
     local seen={} for _,id in ipairs(ids()) do place(id,seen) end
 end
+cursorUI=function()
+    local x,y=GetCursorPosition()
+    local scale=UIParent:GetEffectiveScale()
+    return x/scale,y/scale
+end
 local function startMove(id)
-    if locked(id) then return end
-    local f=windows[root(id)]; f:StartMoving(); f.moving=true
+    if locked(id) or draggingRoot or resizeDrag then return end
+    local r=root(id); local f=windows[r]
+    local x,y=cursorUI()
+    savePos(r)
+    local cfg=db.windows[r]
+    draggingRoot=r; f.moving=true
+    dragState={x=x,y=y,left=cfg.x,top=cfg.y}
+    hideDockPreview()
+end
+local function updateDrag()
+    local r=draggingRoot
+    if not r or not dragState or not windows[r] then return end
+    local f,c=windows[r],db.windows[r]
+    local x,y=cursorUI()
+    c.x=clamp(dragState.left+x-dragState.x,0,math.max(0,UIParent:GetWidth()-c.width))
+    c.y=clamp(dragState.top+y-dragState.y,-math.max(0,UIParent:GetHeight()-groupHeight(r)),0)
+    f:ClearAllPoints(); f:SetPoint("TOPLEFT",UIParent,"TOPLEFT",c.x,c.y)
+    local target,side=findDock(r)
+    dragState.target,dragState.side=target,side
+    showDockPreview(target,side)
 end
 local function stopMove(id)
-    local r=root(id); local f=windows[r]
-    if f.moving then f:StopMovingOrSizing(); f.moving=false; savePos(r); layout(); snap(r); refresh() end
+    local r=draggingRoot
+    if not r then return end
+    local f=windows[r]
+    -- Commit exactly the last visibly indicated candidate. Recomputing
+    -- after native StopMoving can change frame geometry and lose the dock.
+    local target,side=dragState and dragState.target,dragState and dragState.side
+    if f then f.moving=false end
+    draggingRoot=nil; dragState=nil; hideDockPreview()
+    if f and target and windows[target] and dock(r,target,side) then return end
+    layout(); refresh()
+end
+local function tickResize()
+    if not resizeDrag then return end
+    local d=resizeDrag
+    if not windows[d.id] or locked(d.id) or db.hidden then resizeDrag=nil; return end
+    local x,y=cursorUI()
+    local w,rows=setGroupSize(d.id,d.width+x-d.x,d.rows+(d.y-y)/ROW)
+    if w~=d.lastWidth or rows~=d.lastRows then
+        d.lastWidth,d.lastRows=w,rows
+        layout(); refresh()
+    end
+end
+local function endResize()
+    if resizeDrag then tickResize(); resizeDrag=nil end
 end
 makeWindow=function(id)
     if windows[id] then return end
-    local f=CreateFrame("Frame","RCombatMeterWindow"..id,UIParent)
-    windows[id]=f; f.id=id; f.rows={}; f.offset=0
-    f:SetFrameStrata("MEDIUM"); f:SetMovable(true); f:SetResizable(true); f:SetClampedToScreen(true)
+    -- Anonymous, manually anchored windows are not subject to the game's
+    -- named-frame layout cache or independent native screen clamping.
+    local f=CreateFrame("Frame",nil,UIParent)
+    windows[id]=f; f.id=id; f.rows={}; f.offset=0; f:Hide()
+    f:SetFrameStrata("MEDIUM"); f:SetMovable(true); f:SetResizable(true); f:SetClampedToScreen(false)
     if f.SetResizeBounds then f:SetResizeBounds(MINW,TOP+ROW+FOOT,MAXW,TOP+ROW*MAXROWS+FOOT) end
     f:EnableMouse(true)
     local bg=rect(f,"BACKGROUND",.045,.061,.082,.91); bg:SetAllPoints()
     border(f,.25,.35,.40,.85)
-    local accent=rect(f,"ARTWORK",ACC[1],ACC[2],ACC[3],1); accent:SetPoint("TOPLEFT",1,-1); accent:SetPoint("TOPRIGHT",-1,-1); accent:SetHeight(2)
+    local accent=rect(f,"ARTWORK",ACC[1],ACC[2],ACC[3],1); f.accent=accent; accent:SetPoint("TOPLEFT",1,-1); accent:SetPoint("TOPRIGHT",-1,-1); accent:SetHeight(2)
     local header=CreateFrame("Frame",nil,f); header:SetPoint("TOPLEFT",2,-3); header:SetPoint("TOPRIGHT",-2,-3); header:SetHeight(33)
-    local headBg=rect(header,"BACKGROUND",.075,.105,.13,1); headBg:SetAllPoints()
+    local headBg=rect(header,"BACKGROUND",HEADER[1],HEADER[2],HEADER[3],1); f.headBg=headBg; headBg:SetAllPoints()
     header:EnableMouse(true); header:RegisterForDrag("LeftButton")
     header:SetScript("OnDragStart",function() startMove(id) end); header:SetScript("OnDragStop",function() stopMove(id) end)
-    local brand=label(header,11,ACC[1],ACC[2],ACC[3]); brand:SetPoint("LEFT",8,0); brand:SetText("RM")
-    f.mode=button(header,"",174,25,function(b) showMenu(b,id,"mode") end,"Modus auswählen")
+    local brand=label(header,11,ACC[1],ACC[2],ACC[3]); f.brand=brand; brand:SetPoint("LEFT",8,0); brand:SetText("RM")
+    f.mode=button(header,"",156,25,function(b) showMenu(b,id,"mode") end,L.MODE_TOOLTIP)
     f.mode:SetPoint("LEFT",brand,"RIGHT",8,0)
-    f.controls=button(header,"+",26,25,function(b) showMenu(b,id,"windows") end,"Window Control")
+    f.controls=button(header,"+",26,25,function(b) showMenu(b,id,"windows") end,L.WINDOW_CONTROL)
     f.controls:SetPoint("RIGHT",-5,0)
-    f.lock=button(header,"U",26,25,function()
+    f.lock=button(header,"",26,25,function()
+        endResize()
         local c=db.windows[root(id)]; c.locked=not c.locked; layout()
-    end,"U = beweglich, L = gesperrt. Gilt für die ganze Fenstergruppe.")
+    end,L.LOCK_TOOLTIP)
+    createLockIcon(f.lock)
     f.lock:SetPoint("RIGHT",f.controls,"LEFT",-4,0)
-    f.state=label(header,10,.62,.70,.77,"RIGHT"); f.state:SetPoint("RIGHT",f.lock,"LEFT",-8,0)
+    f.history=button(header,"",26,25,function(b)
+        historyPage=1; showMenu(b,id,"history")
+    end,L.HISTORY_TOOLTIP)
+    createHistoryIcon(f.history)
+    f.history:SetPoint("RIGHT",f.lock,"LEFT",-4,0)
+    f.state=label(header,10,.62,.70,.77,"RIGHT"); f.state:SetPoint("RIGHT",f.history,"LEFT",-5,0)
     f.state:SetWidth(42)
     local cols=CreateFrame("Frame",nil,f); cols:SetPoint("TOPLEFT",6,-37); cols:SetPoint("TOPRIGHT",-6,-37); cols:SetHeight(18)
     local line=rect(cols,"ARTWORK",.19,.25,.30,.9); line:SetPoint("BOTTOMLEFT"); line:SetPoint("BOTTOMRIGHT"); line:SetHeight(1)
-    local nameHead=label(cols,10,.60,.70,.77); nameHead:SetPoint("LEFT",47,0); nameHead:SetText("SPIELER")
-    local percentHead=label(cols,10,.60,.70,.77,"RIGHT"); percentHead:SetPoint("RIGHT",-8,0); percentHead:SetWidth(47); percentHead:SetText("ANTEIL")
+    local nameHead=label(cols,10,.60,.70,.77); nameHead:SetPoint("LEFT",47,0); nameHead:SetText(L.PLAYER)
+    local percentHead=label(cols,10,.60,.70,.77,"RIGHT"); percentHead:SetPoint("RIGHT",-8,0); percentHead:SetWidth(47); percentHead:SetText(L.SHARE)
     f.rateHead=label(cols,10,.60,.70,.77,"RIGHT"); f.rateHead:SetPoint("RIGHT",percentHead,"LEFT",-8,0); f.rateHead:SetWidth(80)
     f.amountHead=label(cols,10,.60,.70,.77,"RIGHT"); f.amountHead:SetPoint("RIGHT",f.rateHead,"LEFT",-10,0); f.amountHead:SetWidth(92)
-    f.empty=label(f,12,.55,.65,.73,"CENTER"); f.empty:SetPoint("TOPLEFT",10,-TOP); f.empty:SetPoint("BOTTOMRIGHT",-10,FOOT); f.empty:SetText("Bereit")
+    f.empty=label(f,12,.55,.65,.73,"CENTER"); f.empty:SetPoint("TOPLEFT",10,-TOP); f.empty:SetPoint("BOTTOMRIGHT",-10,FOOT); f.empty:SetText(L.READY_TEXT)
     local footer=CreateFrame("Frame",nil,f); footer:SetPoint("BOTTOMLEFT",6,2); footer:SetPoint("BOTTOMRIGHT",-6,2); footer:SetHeight(18)
-    f.footer=label(footer,10,.59,.69,.76); f.footer:SetPoint("LEFT",3,0)
+    f.footer=label(footer,10,.59,.69,.76); f.footer:SetPoint("LEFT",3,0); f.footer:SetPoint("RIGHT",footer,"RIGHT",-125,0)
     f.timer=label(footer,10,.72,.82,.87,"RIGHT"); f.timer:SetPoint("RIGHT",-23,0)
-    f.resize=button(footer,"/",18,17,function() end,"Ziehen: Höhe und Breite ändern")
+    f.resize=button(footer,"/",18,17,function() end,L.RESIZE_TOOLTIP)
     f.resize:SetPoint("RIGHT")
     f.resize:SetScript("OnMouseDown",function(_,btn)
-        if btn=="LeftButton" and not locked(id) then f:StartSizing("BOTTOMRIGHT"); f.sizing=true end
-    end)
-    f.resize:SetScript("OnMouseUp",function()
-        if f.sizing then
-            f:StopMovingOrSizing(); f.sizing=false
-            local c=db.windows[id]; c.width=clamp(f:GetWidth(),MINW,MAXW); c.rows=clamp(math.floor((f:GetHeight()-TOP-FOOT)/ROW+.5),1,MAXROWS)
-            layout(); refresh()
+        if btn=="LeftButton" and not locked(id) and not draggingRoot and not resizeDrag then
+            local x,y=cursorUI()
+            local c=db.windows[root(id)]
+            resizeDrag={id=id,x=x,y=y,width=c.width,rows=c.rows,lastWidth=c.width,lastRows=c.rows}
         end
+    end)
+    f.resize:SetScript("OnMouseUp",function(_,btn)
+        if btn=="LeftButton" then endResize() end
     end)
     f:SetScript("OnMouseWheel",function(_,delta)
         f.offset=math.max(0,(f.offset or 0)-delta); refresh()
@@ -352,16 +626,16 @@ end
 local function performReset()
     if not pendingReset or live or (InCombatLockdown and InCombatLockdown()) then return end
     if not C_DamageMeter or not C_DamageMeter.ResetAllCombatSessions then
-        pendingReset=false; msg("Reset-API nicht verfügbar."); return
+        pendingReset=false; msg(L.RESET_UNAVAILABLE); return
     end
     local ok=pcall(C_DamageMeter.ResetAllCombatSessions)
     if ok then
         pendingReset=false
-        for _,f in pairs(windows) do f.offset=0 end
-        msg("Kampfdaten zurückgesetzt ("..(resetReason or "manuell")..")."); refresh()
+        for _,f in pairs(windows) do f.offset=0; f.historyID=nil; f.historyName=nil end
+        msg(L.RESET_PREFIX..(resetReason or L.MANUAL)..")."); refresh()
     else
         resetRetry=resetRetry+1
-        if resetRetry>=3 then pendingReset=false; msg("Reset vom Client nicht zugelassen.") end
+        if resetRetry>=3 then pendingReset=false; msg(L.RESET_DENIED) end
     end
 end
 local function instanceKey()
@@ -377,12 +651,12 @@ local function checkZone()
         local previous=lastZone
         lastZone=key; db.lastZone=key
         if db.autoReset and ((previous and previous~="world") or key~="world") then
-            requestReset(key=="world" and "Instanz verlassen" or "Neue Instanz")
+            requestReset(key=="world" and L.INSTANCE_LEAVE or L.INSTANCE_NEW)
         end
     end
 end
 showMenu=function(anchor,id,kind)
-    if menu and menu:IsShown() and menu.anchor==anchor then menu:Hide(); return end
+    if menu and menu:IsShown() and menu.anchor==anchor and kind~="historyPage" then menu:Hide(); return end
     if not menu then
         menu=CreateFrame("Frame",nil,UIParent)
         menu:SetFrameStrata("DIALOG"); menu:SetClampedToScreen(true); menu:EnableMouse(true)
@@ -392,7 +666,23 @@ showMenu=function(anchor,id,kind)
     menu.anchor=anchor
     local opts={}
     local function item(t,fn) opts[#opts+1]={t,fn} end
-    if kind=="mode" then
+    if kind=="history" or kind=="historyPage" then
+        local f=windows[id]; local entries=availableHistory()
+        item((not f.historyID and "> " or "   ")..L.LIVE_CURRENT,function()
+            f.historyID=nil; f.historyName=nil; f.offset=0; refresh()
+        end)
+        local pages=math.max(1,math.ceil(#entries/9))
+        historyPage=clamp(historyPage,1,pages)
+        if #entries==0 then item(L.NO_FIGHTS,function() end) end
+        for i=(historyPage-1)*9+1,math.min(#entries,historyPage*9) do
+            local e=entries[i]
+            item((f.historyID==e.id and "> " or "   ")..e.name,function()
+                f.historyID=e.id; f.historyName=e.name; f.offset=0; refresh()
+            end)
+        end
+        if historyPage>1 then item(L.PREV_PAGE,function() historyPage=historyPage-1; showMenu(anchor,id,"historyPage") end) end
+        if historyPage<pages then item(L.NEXT_PAGE,function() historyPage=historyPage+1; showMenu(anchor,id,"historyPage") end) end
+    elseif kind=="mode" then
         for i,m in ipairs(MODES) do
             local mode=i
             item((db.windows[id].mode==mode and "> " or "   ")..m.title,function()
@@ -400,35 +690,36 @@ showMenu=function(anchor,id,kind)
             end)
         end
     else
-        item("Neues Fenster anhängen",function()
+        item(L.ATTACH_WINDOW,function()
             addWindow(id,(db.windows[id].mode%#MODES)+1,true)
         end)
-        item("Neues freies Fenster",function()
+        item(L.FREE_WINDOW,function()
             addWindow(id,(db.windows[id].mode%#MODES)+1,false)
         end)
-        if db.windows[id].parent then item("Hier von Gruppe lösen",function() separate(id) end) end
+        if db.windows[id].parent then item(L.DETACH,function() separate(id) end) end
         if not locked(id) then
             for _,target in ipairs(ids()) do
                 local other=target
                 if root(other)==other and other~=root(id) then
-                    item("Gruppe anhängen: #"..other.." "..MODES[db.windows[other].mode].title,function() dock(id,other) end)
+                    item(L.ATTACH_GROUP..other.." "..MODES[db.windows[other].mode].title,function() dock(id,other) end)
                 end
             end
         end
-        item("Fenster schließen",function() closeWindow(id) end)
-        item("Guide / Einstellungen",showGuide)
-        item("Alle Kampfdaten zurücksetzen",function()
-            if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset("manuell") end
+        item(L.CLOSE_WINDOW,function() closeWindow(id) end)
+        item(L.SETTINGS,showGuide)
+        item(L.RESET_ALL,function()
+            if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset(L.MANUAL) end
         end)
     end
+    local menuWidth=(kind=="history" or kind=="historyPage") and 320 or 268
     for _,b in ipairs(menu.items) do b:Hide() end
     for i,opt in ipairs(opts) do
         local b=menu.items[i]
         if not b then b=button(menu,"",258,24,function() end); menu.items[i]=b end
-        b:ClearAllPoints(); b:SetPoint("TOPLEFT",5,-5-(i-1)*26); b.t:SetText(opt[1])
+        b:SetWidth(menuWidth-10); b:ClearAllPoints(); b:SetPoint("TOPLEFT",5,-5-(i-1)*26); b.t:SetText(opt[1])
         local action=opt[2]; b:SetScript("OnClick",function() menu:Hide(); action() end); b:Show()
     end
-    menu:SetSize(268,10+#opts*26)
+    menu:SetSize(menuWidth,10+#opts*26)
     menu:ClearAllPoints()
     local _,y=anchor:GetCenter()
     if y and y<UIParent:GetHeight()/2 then menu:SetPoint("BOTTOMRIGHT",anchor,"TOPRIGHT",0,3)
@@ -440,57 +731,108 @@ local function preset(n)
         for _,f in pairs(windows) do f:Hide() end
     end
     windows={}; db.windows={}; db.hidden=false
-    local x=math.max(0,UIParent:GetWidth()-448)
-    local rows=clamp(math.floor((UIParent:GetHeight()-120-n*(TOP+FOOT+GAP))/(n*ROW)),1,5)
-    local y=-math.min(140,math.max(0,UIParent:GetHeight()-(60+n*(TOP+rows*ROW+FOOT+GAP))))
+    local w,h=screenSize()
+    local x=math.max(0,(w or 448)-448)
+    local rows=h and clamp(math.floor((h-120-n*(TOP+FOOT+GAP))/(n*ROW)),1,5) or 5
+    local y=h and -math.min(140,math.max(0,h-(60+n*(TOP+rows*ROW+FOOT+GAP)))) or -140
     local prev
     for i=1,n do
-        local id=newConfig(i,x,y,prev); db.windows[id].rows=rows; makeWindow(id); prev=id
+        local id=newConfig(i,x,y,prev); db.windows[id].rows=rows
+        if not w and not prev then db.windows[id].centerOnLayout=true end
+        makeWindow(id); prev=id
     end
     layout(); refresh()
+end
+local function updateTheme()
+    layout(); refresh()
+    if guide then
+        guide.accentLine:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+        for _,t in ipairs(guide.accentLabels) do t:SetTextColor(ACC[1],ACC[2],ACC[3]) end
+        guide.accentColor.swatch:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+        guide.headerColor.swatch:SetColorTexture(HEADER[1],HEADER[2],HEADER[3],1)
+    end
+end
+local function chooseColor(key,target)
+    if not ColorPickerFrame or not ColorPickerFrame.SetupColorPickerAndShow then
+        msg(L.COLOR_UNAVAILABLE); return
+    end
+    local old={target[1],target[2],target[3]}
+    local function apply(a,b,c)
+        target[1],target[2],target[3]=a,b,c
+        db[key]={a,b,c}; updateTheme()
+    end
+    ColorPickerFrame:SetupColorPickerAndShow({
+        r=old[1],g=old[2],b=old[3],hasOpacity=false,
+        swatchFunc=function() apply(ColorPickerFrame:GetColorRGB()) end,
+        cancelFunc=function() apply(old[1],old[2],old[3]) end
+    })
 end
 showGuide=function()
     if menu then menu:Hide() end
     if not guide then
         guide=CreateFrame("Frame","RCombatMeterGuide",UIParent)
-        guide:SetSize(540,492); guide:SetPoint("CENTER"); guide:SetFrameStrata("DIALOG"); guide:SetClampedToScreen(true)
+        guide:SetSize(540,585); guide:SetPoint("CENTER"); guide:SetFrameStrata("DIALOG"); guide:SetClampedToScreen(true)
         guide:EnableMouse(true); guide:SetMovable(true); guide:RegisterForDrag("LeftButton")
         guide:SetScript("OnDragStart",guide.StartMoving); guide:SetScript("OnDragStop",guide.StopMovingOrSizing)
         local bg=rect(guide,"BACKGROUND",.055,.072,.095,.99); bg:SetAllPoints()
         border(guide,.25,.43,.45,1)
-        local line=rect(guide,"ARTWORK",ACC[1],ACC[2],ACC[3],1); line:SetPoint("TOPLEFT",1,-1); line:SetPoint("TOPRIGHT",-1,-1); line:SetHeight(3)
-        local kicker=label(guide,11,ACC[1],ACC[2],ACC[3]); kicker:SetPoint("TOPLEFT",22,-19); kicker:SetText("R-COMBATMETER")
-        local title=label(guide,24,1,1,1); title:SetPoint("TOPLEFT",22,-40); title:SetText("Dein Kampf. Dein Layout.")
-        local sub=label(guide,12,.64,.74,.80); sub:SetPoint("TOPLEFT",22,-78); sub:SetText("WoW Forever  •  Setup Guide  •  Version 1.0.1")
+        guide.accentLabels={}
+        local line=rect(guide,"ARTWORK",ACC[1],ACC[2],ACC[3],1); guide.accentLine=line; line:SetPoint("TOPLEFT",1,-1); line:SetPoint("TOPRIGHT",-1,-1); line:SetHeight(3)
+        local kicker=label(guide,11,ACC[1],ACC[2],ACC[3]); kicker:SetPoint("TOPLEFT",22,-19); kicker:SetText("R-COMBATMETER"); table.insert(guide.accentLabels,kicker)
+        local title=label(guide,24,1,1,1); title:SetPoint("TOPLEFT",22,-40); title:SetText(L.GUIDE_TITLE)
+        local sub=label(guide,12,.64,.74,.80); sub:SetPoint("TOPLEFT",22,-78); sub:SetText(L.GUIDE_SUB)
         local function paragraph(y,titleText,body)
-            local t=label(guide,13,ACC[1],ACC[2],ACC[3]); t:SetPoint("TOPLEFT",22,-y); t:SetText(titleText)
+            local t=label(guide,13,ACC[1],ACC[2],ACC[3]); t:SetPoint("TOPLEFT",22,-y); t:SetText(titleText); table.insert(guide.accentLabels,t)
             local p=label(guide,12,.82,.87,.91); p:SetWordWrap(true); p:SetJustifyV("TOP"); p:SetPoint("TOPLEFT",22,-y-22); p:SetWidth(496); p:SetText(body)
         end
-        paragraph(112,"01   LAYOUT", "Wähle ein Startlayout (ersetzt vorhandene Fenster). Ziehe am Header, passe die Größe unten rechts an und sperre die Gruppe mit L/U. Mit + fügst du Fenster an oder löst sie.")
-        local single=button(guide,"1 • Damage",152,32,function() preset(1) end); single:SetPoint("TOPLEFT",22,-183)
-        local dual=button(guide,"2 • Fight + Overall",152,32,function() preset(2) end); dual:SetPoint("LEFT",single,"RIGHT",10,0)
-        local triple=button(guide,"3 • + Healing",172,32,function() preset(3) end); triple:SetPoint("LEFT",dual,"RIGHT",10,0)
-        paragraph(235,"02   AUTOMATIK", "Aktuelle Kämpfe nutzt der Client automatisch. Overall lässt sich bei Instanzwechsel und gemeldeten Dungeon-Abschlüssen zurücksetzen. Das betrifft auch andere Meter mit Blizzards Datenquelle.")
+        paragraph(112,L.LAYOUT, L.LAYOUT_BODY)
+        local single=button(guide,L.PRESET_ONE,152,32,function() preset(1) end); single:SetPoint("TOPLEFT",22,-183)
+        local dual=button(guide,L.PRESET_TWO,152,32,function() preset(2) end); dual:SetPoint("LEFT",single,"RIGHT",10,0)
+        local triple=button(guide,L.PRESET_THREE,172,32,function() preset(3) end); triple:SetPoint("LEFT",dual,"RIGHT",10,0)
+        paragraph(235,L.AUTOMATION, L.AUTOMATION_BODY)
         guide.auto=button(guide,"",246,31,function()
             db.autoReset=not db.autoReset; showGuide()
         end); guide.auto:SetPoint("TOPLEFT",22,-306)
         guide.preview=button(guide,"",242,31,function()
-            demo=not demo; showGuide(); refresh()
+            demo=not demo; if demo then demoClock=0 end; showGuide(); refresh()
         end); guide.preview:SetPoint("LEFT",guide.auto,"RIGHT",8,0)
-        paragraph(355,"03   LIVE-DATEN", "Bei geschützten Kampfwerten zeigt der Client Zahlen und Balken direkt an. Prozentanteile erscheinen, sobald die Zahlen lesbar sind. Wenn keine Daten erscheinen, aktiviere das Blizzard-Damage-Meter in den Spieloptionen.")
-        local finish=button(guide,"FERTIG  /  SPIELEN",496,35,function()
+        paragraph(355,L.LIVE_DATA, L.LIVE_BODY)
+        local colorTitle=label(guide,13,ACC[1],ACC[2],ACC[3])
+        colorTitle:SetPoint("TOPLEFT",22,-432); colorTitle:SetText(L.COLORS)
+        table.insert(guide.accentLabels,colorTitle)
+        local function colorButton(title,key,target,w)
+            local b=button(guide,title,w,32,function() chooseColor(key,target) end)
+            b.swatch=rect(b,"OVERLAY",target[1],target[2],target[3],1)
+            b.swatch:SetPoint("LEFT",9,0); b.swatch:SetSize(16,16)
+            return b
+        end
+        guide.accentColor=colorButton(L.ACCENT,"accentColor",ACC,176)
+        guide.accentColor:SetPoint("TOPLEFT",22,-457)
+        guide.headerColor=colorButton(L.HEADER,"headerColor",HEADER,176)
+        guide.headerColor:SetPoint("LEFT",guide.accentColor,"RIGHT",8,0)
+        local reset=button(guide,L.DEFAULT,128,32,function()
+            for i=1,3 do ACC[i]=DEFAULT_ACC[i]; HEADER[i]=DEFAULT_HEADER[i] end
+            db.accentColor=nil; db.headerColor=nil; updateTheme()
+        end)
+        reset:SetPoint("LEFT",guide.headerColor,"RIGHT",8,0)
+        local finish=button(guide,L.FINISH,496,35,function()
             db.guideDone=true; demo=false; guide:Hide(); refresh()
         end); finish:SetPoint("BOTTOMLEFT",22,19)
         finish.bg:SetColorTexture(.12,.38,.36,1)
         local x=button(guide,"X",25,25,function() db.guideDone=true; demo=false; guide:Hide(); refresh() end); x:SetPoint("TOPRIGHT",-10,-10)
     end
-    guide.auto.t:SetText("Auto-Reset: "..(db.autoReset and "AN" or "AUS"))
-    guide.preview.t:SetText("Demo-Vorschau: "..(demo and "AN" or "AUS"))
+    guide.auto.t:SetText(L.AUTO_RESET..(db.autoReset and L.ON or L.OFF))
+    guide.preview.t:SetText(L.DEMO_PREVIEW..(demo and L.ON or L.OFF))
     guide:Show()
 end
 local function init()
     RCombatMeterDB=RCombatMeterDB or {}
     db=RCombatMeterDB
+    local function restore(target,key,defaults)
+        local saved=db[key]
+        for i=1,3 do target[i]=type(saved)=="table" and type(saved[i])=="number" and clamp(saved[i],0,1) or defaults[i] end
+    end
+    restore(ACC,"accentColor",DEFAULT_ACC); restore(HEADER,"headerColor",DEFAULT_HEADER)
     db.windows=db.windows or {}; db.nextID=db.nextID or 0
     if db.autoReset==nil then db.autoReset=true end
     lastZone=db.lastZone
@@ -508,9 +850,9 @@ local function init()
     end
     if StaticPopupDialogs then
         StaticPopupDialogs.RCOMBATMETER_RESET={
-            text="Alle Kampfdaten zurücksetzen? Dies betrifft auch das eingebaute Damage Meter und andere Addons, die dieselben Daten nutzen.",
-            button1="Zurücksetzen",button2="Abbrechen",timeout=0,whileDead=true,hideOnEscape=true,
-            OnAccept=function() requestReset("manuell") end,
+            text=L.RESET_CONFIRM,
+            button1=L.RESET,button2=L.CANCEL,timeout=0,whileDead=true,hideOnEscape=true,
+            OnAccept=function() requestReset(L.MANUAL) end,
         }
     end
     if not db.guideDone then demo=true; showGuide() end
@@ -521,8 +863,8 @@ SlashCmdList.RCOMBATMETER=function(command)
     if not db then return end
     local cmd=command:lower():match("^%s*(%S*)") or ""
     if cmd=="hide" then db.hidden=not db.hidden; layout(); refresh()
-    elseif cmd=="demo" then demo=not demo; refresh()
-    elseif cmd=="reset" then if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset("manuell") end
+    elseif cmd=="demo" then demo=not demo; if demo then demoClock=0 end; if guide and guide:IsShown() then showGuide() end; refresh()
+    elseif cmd=="reset" then if StaticPopup_Show then StaticPopup_Show("RCOMBATMETER_RESET") else requestReset(L.MANUAL) end
     elseif cmd=="lock" then
         local a=ids(); local state=not locked(a[1])
         for _,id in ipairs(a) do if root(id)==id then db.windows[id].locked=state end end
@@ -541,20 +883,39 @@ events:SetScript("OnEvent",function(_,event,arg)
     elseif event=="PLAYER_ENTERING_WORLD" or event=="ZONE_CHANGED_NEW_AREA" then
         live=UnitAffectingCombat("player") or false
         zoneAt=GetTime()+0.8
+        if event=="PLAYER_ENTERING_WORLD" then layout(); dirty=true end
     elseif event=="PLAYER_REGEN_DISABLED" then
         live=true; dirty=true
-        for _,f in pairs(windows) do if MODES[db.windows[f.id].mode].session==1 then f.offset=0 end end
+        for _,f in pairs(windows) do if not f.historyID and MODES[db.windows[f.id].mode].session==1 then f.offset=0 end end
     elseif event=="PLAYER_REGEN_ENABLED" then live=false; dirty=true
     elseif event=="UI_SCALE_CHANGED" or event=="DISPLAY_SIZE_CHANGED" then layout(); dirty=true
     elseif event=="LFG_COMPLETION_REWARD" or event=="CHALLENGE_MODE_COMPLETED" then
-        if db.autoReset and instanceKey()~="world" then requestReset("Instanz abgeschlossen") end
+        if db.autoReset and instanceKey()~="world" then requestReset(L.INSTANCE_DONE) end
     elseif event=="DAMAGE_METER_RESET" then
-        for _,f in pairs(windows) do f.offset=0 end
+        for _,f in pairs(windows) do f.offset=0; f.historyID=nil; f.historyName=nil end
         dirty=true
     else dirty=true end
 end)
 events:SetScript("OnUpdate",function(_,dt)
     if not db then return end
+    local w,h=screenSize()
+    if w and (layoutPending or w~=lastLayoutWidth or h~=lastLayoutHeight) then
+        layout(); dirty=true
+    end
+    if draggingRoot then
+        if not windows[draggingRoot] or db.hidden then
+            local f=windows[draggingRoot]
+            if f then f.moving=false end
+            draggingRoot=nil; dragState=nil; hideDockPreview()
+        elseif IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then
+            stopMove(draggingRoot)
+        else updateDrag() end
+    end
+    if resizeDrag then
+        tickResize()
+        if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then endResize() end
+    end
+    if demo then demoClock=demoClock+dt end
     elapsed=elapsed+dt; checkElapsed=checkElapsed+dt
     if zoneAt and GetTime()>=zoneAt then zoneAt=nil; checkZone(); dirty=true end
     if checkElapsed>=1 then
@@ -563,7 +924,7 @@ events:SetScript("OnUpdate",function(_,dt)
         if not zoneAt then checkZone() end
         dirty=true
     end
-    if elapsed>=.20 and (dirty or live or demo) then
+    if elapsed>=(demo and .12 or .20) and (dirty or live or demo) then
         elapsed=0; dirty=false; refresh()
     end
 end)
