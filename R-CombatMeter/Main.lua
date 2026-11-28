@@ -350,6 +350,7 @@ local function closeWindow(id)
     if nextID then
         savePos(nextID); db.windows[nextID].parent=c.parent; db.windows[nextID].locked=locked(id)
     end
+    if detail and detail.owner==windows[id] then detail:Hide() end
     windows[id]:Hide(); windows[id]=nil; db.windows[id]=nil
     layout(); refresh()
 end
@@ -401,7 +402,7 @@ local function createRow(f,i)
     r.mark=rect(top,"OVERLAY",ACC[1],ACC[2],ACC[3],1); r.mark:SetPoint("TOPLEFT",0,0); r.mark:SetPoint("BOTTOMLEFT",0,0); r.mark:SetWidth(2); r.mark:Hide()
     r:EnableMouse(true)
     r:SetScript("OnClick",function()
-        if r.source then showDetail(f,r.source) end
+        if r.source then showDetail(f,r) end
     end)
     r:Hide(); return r
 end
@@ -697,24 +698,80 @@ local function fetchDetails(ctx)
     if ok and not secret(v) and type(v)=="table" then return localOverallDetails(v,ctx) end
 end
 local function createSpellRow(p,i)
-    local r=CreateFrame("Frame",nil,p); r:SetSize(494,26); r:SetPoint("TOPLEFT",13,-91-(i-1)*29)
+    local r=CreateFrame("Frame",nil,p); r:SetHeight(ROW-3)
+    r:SetPoint("TOPLEFT",6,-TOP-(i-1)*ROW); r:SetPoint("TOPRIGHT",-6,-TOP-(i-1)*ROW)
     r.back=rect(r,"BACKGROUND",.11,.15,.19,.94); r.back:SetAllPoints()
     r.bar=CreateFrame("StatusBar",nil,r); r.bar:SetAllPoints(); r.bar:SetStatusBarTexture(TEX); r.bar:SetMinMaxValues(0,1)
     local top=CreateFrame("Frame",nil,r); top:SetAllPoints(); top:SetFrameLevel(r.bar:GetFrameLevel()+1)
-    r.icon=top:CreateTexture(nil,"ARTWORK"); r.icon:SetSize(24,24); r.icon:SetPoint("LEFT",2,0)
-    r.name=label(top,12,1,1,1); r.name:SetPoint("LEFT",32,0); r.name:SetWidth(250); r.name:SetMaxLines(1)
-    r.amount=label(top,12,1,1,1,"RIGHT"); r.amount:SetPoint("RIGHT",-83,0); r.amount:SetWidth(115)
-    r.share=label(top,11,.84,.90,.95,"RIGHT"); r.share:SetPoint("RIGHT",-8,0); r.share:SetWidth(70)
+    r.icon=top:CreateTexture(nil,"ARTWORK"); r.icon:SetSize(20,20); r.icon:SetPoint("LEFT",1,0)
+    r.share=label(top,11,.84,.90,.95,"RIGHT"); r.share:SetPoint("RIGHT",-8,0); r.share:SetWidth(52)
+    r.amount=label(top,12,1,1,1,"RIGHT"); r.amount:SetPoint("RIGHT",r.share,"LEFT",-8,0); r.amount:SetWidth(90)
+    r.name=label(top,12,1,1,1); r.name:SetPoint("LEFT",27,0); r.name:SetPoint("RIGHT",r.amount,"LEFT",-8,0); r.name:SetMaxLines(1)
     return r
+end
+local function detailKey(source)
+    if secret(source) or type(source)~="table" then return end
+    if readable(source.sourceGUID) and type(source.sourceGUID)=="string" and source.sourceGUID~="" then return "g:"..source.sourceGUID end
+    if num(source.sourceCreatureID) and source.sourceCreatureID>0 then return "c:"..source.sourceCreatureID end
+    if readable(source.name) and type(source.name)=="string" then return "n:"..source.name end
+end
+local function positionDetail(p)
+    local f,ctx=p.owner,p.ctx
+    if not f or not ctx or not db or db.hidden or windows[f.id]~=f or not db.windows[f.id] or not f:IsShown()
+        or MODES[db.windows[f.id].mode]~=ctx.mode or f.historyID~=ctx.history
+        or (demo and not f.historyID)~=ctx.demo then return false end
+    -- Follow the selected player when the ranking moves. Never attach to a
+    -- different player merely because the same physical row was recycled.
+    local row
+    if ctx.key then
+        for i=1,db.windows[f.id].rows do
+            local candidate=f.rows[i]
+            if candidate and candidate:IsShown() and detailKey(candidate.source)==ctx.key then row=candidate; break end
+        end
+    elseif p.anchorRow and p.anchorRow:IsShown() and p.anchorRow.source and not detailKey(p.anchorRow.source) then
+        row=p.anchorRow
+    end
+    if not row then return false end
+    local width,height=f:GetWidth(),f:GetHeight()
+    if not num(width) or not num(height) then return false end
+    local screenTop,screenBottom,rowTop,rowBottom=UIParent:GetTop(),UIParent:GetBottom(),row:GetTop(),row:GetBottom()
+    local availableAbove,availableBelow=height,height
+    if num(screenTop) and num(rowTop) then availableAbove=math.max(0,screenTop-rowTop-3) end
+    if num(screenBottom) and num(rowBottom) then availableBelow=math.max(0,rowBottom-screenBottom-3) end
+    local minHeight=TOP+ROW+FOOT
+    local above=availableAbove>=minHeight or availableAbove>=availableBelow
+    local available=above and availableAbove or availableBelow
+    -- Screen-edge fallback: fit as many complete rows as possible without
+    -- covering the selected row, which must remain clickable.
+    local rows=math.min(db.windows[f.id].rows,math.floor((math.min(height,available)-TOP-FOOT)/ROW))
+    if rows<1 then return false end
+    local targetHeight=TOP+rows*ROW+FOOT
+    if p.anchorRow~=row or p.above~=above or not p.anchorSet then
+        p:ClearAllPoints()
+        if above then p:SetPoint("BOTTOMLEFT",row,"TOPLEFT",-6,3)
+        else p:SetPoint("TOPLEFT",row,"BOTTOMLEFT",-6,-3) end
+        p.anchorRow,p.above,p.anchorSet=row,above,true
+    end
+    p:SetWidth(width)
+    if p.targetHeight~=targetHeight then
+        p.targetHeight=targetHeight
+        if not p.animating then p:SetHeight(targetHeight) end
+    end
+    p.visibleRows=rows
+    for i=1,rows do if not p.rows[i] then p.rows[i]=createSpellRow(p,i) end end
+    p.headBg:SetColorTexture(HEADER[1],HEADER[2],HEADER[3],1)
+    p.line:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+    return true
 end
 refreshDetail=function()
     if not detail or not detail:IsShown() or not detail.ctx then return end
     local ctx=detail.ctx
+    if not positionDetail(detail) then detail:Hide(); return end
     local data=fetchDetails(ctx)
     local spells=data and data.combatSpells
     if secret(spells) or type(spells)~="table" then spells=nil end
     local n=spells and #spells or 0
-    detail.offset=clamp(detail.offset or 0,0,math.max(0,n-10))
+    detail.offset=clamp(detail.offset or 0,0,math.max(0,n-detail.visibleRows))
     local total=data and data.totalAmount
     if not num(total) and not secret(total) and spells then
         total=0
@@ -727,7 +784,7 @@ refreshDetail=function()
     if not num(max) and not secret(max) then max=1 end
     if num(max) and max<=0 then max=1 end
     for i,r in ipairs(detail.rows) do
-        local sp=spells and spells[i+detail.offset]
+        local sp=i<=detail.visibleRows and spells and spells[i+detail.offset]
         if not secret(sp) and type(sp)=="table" then
             local name,icon=spellInfo(sp.spellID)
             r.icon:SetTexture(icon); r.icon:SetTexCoord(.07,.93,.07,.93)
@@ -741,38 +798,67 @@ refreshDetail=function()
     end
     detail.empty:SetShown(n==0)
     detail.empty:SetText(live and L.DETAIL_COMBAT or L.DETAIL_UNAVAILABLE)
-    detail.footer:SetText(n>0 and (string.format("%d–%d / %d",detail.offset+1,math.min(n,detail.offset+10),n).."  •  "..L.SCROLL) or "")
+    detail.footer:SetText(n>0 and (string.format("%d–%d / %d",detail.offset+1,math.min(n,detail.offset+detail.visibleRows),n).."  •  "..L.SCROLL) or "")
 end
-showDetail=function(f,source)
+showDetail=function(f,row)
+    local source=row and row.source
     if secret(source) or type(source)~="table" then return end
-    if not detail then
-        local p=CreateFrame("Frame",nil,UIParent); detail=p
-        p:SetSize(520,420); p:SetPoint("CENTER"); p:SetFrameStrata("DIALOG"); p:SetClampedToScreen(true)
-        p:EnableMouse(true); p:EnableMouseWheel(true); p:SetMovable(true); p:RegisterForDrag("LeftButton")
-        p:SetScript("OnDragStart",p.StartMoving); p:SetScript("OnDragStop",p.StopMovingOrSizing)
-        p:SetScript("OnMouseWheel",function(_,d) p.offset=math.max(0,p.offset-d); refreshDetail() end)
-        local back=rect(p,"BACKGROUND",.045,.065,.085,.99); back:SetAllPoints(); border(p,.25,.40,.44,1)
-        p.line=rect(p,"ARTWORK",1,1,1,1); p.line:SetPoint("TOPLEFT"); p.line:SetPoint("TOPRIGHT"); p.line:SetHeight(3)
-        p.title=label(p,20,1,1,1); p.title:SetPoint("TOPLEFT",15,-14); p.title:SetWidth(450); p.title:SetMaxLines(1)
-        p.sub=label(p,12,.72,.83,.88); p.sub:SetPoint("TOPLEFT",15,-44); p.sub:SetWidth(490)
-        local close=button(p,"X",26,26,function() p:Hide() end); close:SetPoint("TOPRIGHT",-10,-10)
-        local a=label(p,11,.67,.78,.82); a:SetPoint("TOPLEFT",17,-70); a:SetText(L.ABILITY)
-        local b=label(p,11,.67,.78,.82,"RIGHT"); b:SetPoint("TOPRIGHT",-94,-70); b:SetText(L.TOTAL)
-        local c=label(p,11,.67,.78,.82,"RIGHT"); c:SetPoint("TOPRIGHT",-20,-70); c:SetText(L.SHARE)
-        p.rows={}; for i=1,10 do p.rows[i]=createSpellRow(p,i) end
-        p.empty=label(p,13,.70,.80,.85,"CENTER"); p.empty:SetPoint("CENTER"); p.empty:SetWidth(470); p.empty:SetWordWrap(true)
-        p.footer=label(p,11,.65,.75,.81); p.footer:SetPoint("BOTTOMLEFT",15,11)
-    end
     local m=MODES[db.windows[f.id].mode]
+    local key=detailKey(source)
+    if detail and detail:IsShown() and detail.owner==f and detail.ctx
+        and detail.ctx.mode==m and detail.ctx.history==f.historyID
+        and ((key and detail.ctx.key==key) or (not key and not detail.ctx.key and detail.anchorRow==row)) then
+        detail:Hide(); return
+    end
+    if not detail then
+        local p=CreateFrame("Frame",nil,f); detail=p
+        p:SetFrameStrata("DIALOG"); p:SetClampedToScreen(false)
+        p:EnableMouse(true); p:EnableMouseWheel(true)
+        p:SetScript("OnMouseWheel",function(_,d) p.offset=math.max(0,p.offset-d); refreshDetail() end)
+        p:SetScript("OnHide",function(self) self.animating=false; self:SetAlpha(1) end)
+        p:SetScript("OnUpdate",function(self,dt)
+            if not self.animating then return end
+            self.progress=math.min(1,self.progress+dt/.14)
+            local t=1-(1-self.progress)^3
+            self:SetHeight(8+(self.targetHeight-8)*t)
+            self:SetAlpha(.25+.75*t)
+            if self.progress>=1 then self.animating=false; self:SetHeight(self.targetHeight); self:SetAlpha(1) end
+        end)
+        local back=rect(p,"BACKGROUND",.045,.065,.085,.99); back:SetAllPoints(); border(p,.25,.40,.44,1)
+        p.headBg=rect(p,"ARTWORK",HEADER[1],HEADER[2],HEADER[3],1)
+        p.headBg:SetPoint("TOPLEFT",1,-3); p.headBg:SetPoint("TOPRIGHT",-1,-3); p.headBg:SetHeight(34)
+        p.line=rect(p,"OVERLAY",1,1,1,1); p.line:SetPoint("TOPLEFT"); p.line:SetPoint("TOPRIGHT"); p.line:SetHeight(2)
+        local close=button(p,"X",25,25,function() p:Hide() end); close:SetPoint("TOPRIGHT",-5,-6)
+        p.title=label(p,14,1,1,1); p.title:SetPoint("TOPLEFT",10,-5); p.title:SetPoint("TOPRIGHT",close,"TOPLEFT",-6,1); p.title:SetMaxLines(1)
+        p.sub=label(p,10,.72,.83,.88); p.sub:SetPoint("TOPLEFT",10,-22); p.sub:SetPoint("TOPRIGHT",-36,-22); p.sub:SetMaxLines(1)
+        local a=label(p,10,.67,.78,.82); a:SetPoint("TOPLEFT",12,-39); a:SetText(L.ABILITY)
+        local c=label(p,10,.67,.78,.82,"RIGHT"); c:SetPoint("TOPRIGHT",-14,-39); c:SetWidth(52); c:SetText(L.SHARE)
+        local b=label(p,10,.67,.78,.82,"RIGHT"); b:SetPoint("RIGHT",c,"LEFT",-8,0); b:SetWidth(90); b:SetText(L.TOTAL)
+        p.rows={}
+        p.empty=label(p,11,.70,.80,.85,"CENTER"); p.empty:SetPoint("TOPLEFT",10,-TOP); p.empty:SetPoint("BOTTOMRIGHT",-10,FOOT); p.empty:SetWordWrap(true)
+        p.footer=label(p,10,.65,.75,.81); p.footer:SetPoint("BOTTOMLEFT",10,6); p.footer:SetPoint("BOTTOMRIGHT",-10,6)
+    end
+    local p=detail
+    p:Hide()
+    p:SetParent(f)
+    p.owner,p.anchorRow,p.anchorSet=f,row,false
     local name=readable(source.name) and source.name or L.PLAYER
-    detail.ctx={mode=m,history=f.historyID,demo=demo and not f.historyID,
+    p.ctx={mode=m,history=f.historyID,demo=demo and not f.historyID,key=key,
         guid=readable(source.sourceGUID) and source.sourceGUID or nil,
         creature=num(source.sourceCreatureID) and source.sourceCreatureID or nil,
         amount=num(source.totalAmount) and source.totalAmount or nil,
         runKey=not f.historyID and m.kind==0 and m.session==0 and source.runKey or nil}
-    detail.title:SetText(name); detail.sub:SetText(m.title.."  •  "..(f.historyName or L.LIVE_CURRENT))
-    detail.line:SetColorTexture(m.color[1],m.color[2],m.color[3],1)
-    detail.offset=0; detail:Show(); refreshDetail()
+    p.title:SetText(name); p.sub:SetText(m.title.."  •  "..(f.historyName or L.LIVE_CURRENT))
+    p.line:SetColorTexture(ACC[1],ACC[2],ACC[3],1)
+    p.offset,p.targetHeight=0,nil
+    p.animating=false
+    if not positionDetail(p) then return end
+    p:Show(); refreshDetail()
+    -- In clients supporting child clipping, reveal from the anchored edge.
+    -- Otherwise the panel opens immediately without an unsafe visual overflow.
+    if p:IsShown() and p.SetClipsChildren and pcall(p.SetClipsChildren,p,true) then
+        p.progress=0; p.animating=true; p:SetHeight(8); p:SetAlpha(.25)
+    end
 end
 refresh=function()
     if not db or db.hidden then return end
@@ -1105,6 +1191,7 @@ showMenu=function(anchor,id,kind)
     menu:Show()
 end
 local function preset(n)
+    if detail then detail:Hide() end
     if count()>0 then
         for _,f in pairs(windows) do f:Hide() end
     end

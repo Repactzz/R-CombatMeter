@@ -1,4 +1,4 @@
-R-CombatMeter  |  v1.0.8
+R-CombatMeter  |  v1.0.9
 WoW Forever 1.60.1 / Interface 16001
 ==================================
 
@@ -38,7 +38,7 @@ BEDIENUNG
 - Schriftrollen-Icon im Header: verfügbare Kämpfe mit Gegnerporträts auswählen.
   Porträts werden beim Erfassen sichtbarer Gegner gespeichert; sonst erscheint ein neutrales Symbol.
   Live kehrt zur aktuellen Anzeige zurück.
-- Spielerzeilen anklicken: Fähigkeiten mit Symbol, Gesamtwert und Anteil anzeigen, soweit der Client die Daten bereitstellt.
+- Spielerzeilen anklicken: ein angedocktes, größenangepasstes Fähigkeitenpanel öffnet sich oberhalb der Zeile. Erneut anklicken zum Schließen. Bei zu wenig Platz wird das Panel verkleinert oder unterhalb geöffnet.
   Der Verlauf enthält die vom Spiel gespeicherten Sitzungen bis zum Reset.
 - Im Guide lassen sich Akzent- und Headerfarbe per Farbauswahl einstellen.
 - Die animierte Demo-Vorschau simuliert wechselnde Ranglisten und Balken.

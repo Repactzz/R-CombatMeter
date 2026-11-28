@@ -1,4 +1,4 @@
-R-CombatMeter | v1.0.8
+R-CombatMeter | v1.0.9
 World of Warcraft: Forever
 
 LANGUAGE
@@ -13,7 +13,7 @@ CONTROLS
 - Lock the group with the padlock. Drag the lower-right corner to resize the group.
 - Click the scroll icon to select past fights retained by the game, or return to live data.
 - Enemy portraits are cached from observed units; unavailable portraits use a neutral icon.
-- Click a player row for ability icons, totals and shares when the client exposes the data.
+- Click a player row to open an attached ability panel above that row, matching the meter size; click again to close. At the screen edge it may shrink or open below.
 - Open the guide to change accent and header colors, layout, or demo preview.
 - Settings > Profiles: select, reset or delete account-wide character profiles.
 - Existing per-character settings migrate on first login. Changes are saved to the active profile.
