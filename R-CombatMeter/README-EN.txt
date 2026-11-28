@@ -1,4 +1,4 @@
-R-CombatMeter | v1.0.9
+R-CombatMeter | v1.0.10
 World of Warcraft: Forever
 
 LANGUAGE

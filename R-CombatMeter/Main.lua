@@ -699,10 +699,14 @@ local function fetchDetails(ctx)
 end
 local function createSpellRow(p,i)
     local r=CreateFrame("Frame",nil,p); r:SetHeight(ROW-3)
+    -- Every component of the overlay is on the same explicit foreground
+    -- strata, with a deterministic background -> fill -> text order.
+    r:SetFrameStrata("HIGH"); r:SetFrameLevel(p:GetFrameLevel()+1)
     r:SetPoint("TOPLEFT",6,-TOP-(i-1)*ROW); r:SetPoint("TOPRIGHT",-6,-TOP-(i-1)*ROW)
     r.back=rect(r,"BACKGROUND",.11,.15,.19,.94); r.back:SetAllPoints()
     r.bar=CreateFrame("StatusBar",nil,r); r.bar:SetAllPoints(); r.bar:SetStatusBarTexture(TEX); r.bar:SetMinMaxValues(0,1)
-    local top=CreateFrame("Frame",nil,r); top:SetAllPoints(); top:SetFrameLevel(r.bar:GetFrameLevel()+1)
+    local top=CreateFrame("Frame",nil,r); r.top=top
+    top:SetFrameStrata("HIGH"); top:SetFrameLevel(p:GetFrameLevel()+3); top:SetAllPoints()
     r.icon=top:CreateTexture(nil,"ARTWORK"); r.icon:SetSize(20,20); r.icon:SetPoint("LEFT",1,0)
     r.share=label(top,11,.84,.90,.95,"RIGHT"); r.share:SetPoint("RIGHT",-8,0); r.share:SetWidth(52)
     r.amount=label(top,12,1,1,1,"RIGHT"); r.amount:SetPoint("RIGHT",r.share,"LEFT",-8,0); r.amount:SetWidth(90)
@@ -811,8 +815,11 @@ showDetail=function(f,row)
         detail:Hide(); return
     end
     if not detail then
-        local p=CreateFrame("Frame",nil,f); detail=p
-        p:SetFrameStrata("DIALOG"); p:SetClampedToScreen(false)
+        -- Render on UIParent, independently of the meter frame tree.
+        -- The selected row remains the anchor; owner/ctx govern visibility.
+        -- Reparenting the overlay to a meter can inherit its lower draw layer.
+        local p=CreateFrame("Frame",nil,UIParent); detail=p
+        p:SetFrameStrata("HIGH"); p:SetFrameLevel(100); p:SetClampedToScreen(false)
         p:EnableMouse(true); p:EnableMouseWheel(true)
         p:SetScript("OnMouseWheel",function(_,d) p.offset=math.max(0,p.offset-d); refreshDetail() end)
         p:SetScript("OnHide",function(self) self.animating=false; self:SetAlpha(1) end)
@@ -821,14 +828,17 @@ showDetail=function(f,row)
             self.progress=math.min(1,self.progress+dt/.14)
             local t=1-(1-self.progress)^3
             self:SetHeight(8+(self.targetHeight-8)*t)
-            self:SetAlpha(.25+.75*t)
+            -- Keep the overlay opaque throughout the reveal so meter text
+            -- cannot bleed through. Only its clipped height is animated.
+            self:SetAlpha(1)
             if self.progress>=1 then self.animating=false; self:SetHeight(self.targetHeight); self:SetAlpha(1) end
         end)
-        local back=rect(p,"BACKGROUND",.045,.065,.085,.99); back:SetAllPoints(); border(p,.25,.40,.44,1)
+        local back=rect(p,"BACKGROUND",.045,.065,.085,1); p.back=back; back:SetAllPoints(); border(p,.25,.40,.44,1)
         p.headBg=rect(p,"ARTWORK",HEADER[1],HEADER[2],HEADER[3],1)
         p.headBg:SetPoint("TOPLEFT",1,-3); p.headBg:SetPoint("TOPRIGHT",-1,-3); p.headBg:SetHeight(34)
         p.line=rect(p,"OVERLAY",1,1,1,1); p.line:SetPoint("TOPLEFT"); p.line:SetPoint("TOPRIGHT"); p.line:SetHeight(2)
-        local close=button(p,"X",25,25,function() p:Hide() end); close:SetPoint("TOPRIGHT",-5,-6)
+        local close=button(p,"X",25,25,function() p:Hide() end); p.close=close
+        close:SetFrameStrata("HIGH"); close:SetFrameLevel(p:GetFrameLevel()+4); close:SetPoint("TOPRIGHT",-5,-6)
         p.title=label(p,14,1,1,1); p.title:SetPoint("TOPLEFT",10,-5); p.title:SetPoint("TOPRIGHT",close,"TOPLEFT",-6,1); p.title:SetMaxLines(1)
         p.sub=label(p,10,.72,.83,.88); p.sub:SetPoint("TOPLEFT",10,-22); p.sub:SetPoint("TOPRIGHT",-36,-22); p.sub:SetMaxLines(1)
         local a=label(p,10,.67,.78,.82); a:SetPoint("TOPLEFT",12,-39); a:SetText(L.ABILITY)
@@ -840,7 +850,8 @@ showDetail=function(f,row)
     end
     local p=detail
     p:Hide()
-    p:SetParent(f)
+    -- Never reparent to a meter; geometry is linked solely by SetPoint.
+    p:SetFrameStrata("HIGH"); p:SetFrameLevel(100)
     p.owner,p.anchorRow,p.anchorSet=f,row,false
     local name=readable(source.name) and source.name or L.PLAYER
     p.ctx={mode=m,history=f.historyID,demo=demo and not f.historyID,key=key,
@@ -857,7 +868,7 @@ showDetail=function(f,row)
     -- In clients supporting child clipping, reveal from the anchored edge.
     -- Otherwise the panel opens immediately without an unsafe visual overflow.
     if p:IsShown() and p.SetClipsChildren and pcall(p.SetClipsChildren,p,true) then
-        p.progress=0; p.animating=true; p:SetHeight(8); p:SetAlpha(.25)
+        p.progress=0; p.animating=true; p:SetHeight(8); p:SetAlpha(1)
     end
 end
 refresh=function()

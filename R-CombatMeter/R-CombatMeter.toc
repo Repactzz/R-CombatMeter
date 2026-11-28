@@ -2,7 +2,7 @@
 ## Title: |cff59d8c6R-CombatMeter|r
 ## Notes: Modern damage and healing meter for WoW Forever.
 ## Author: Repact
-## Version: 1.0.9
+## Version: 1.0.10
 ## SavedVariables: RCombatMeterProfiles
 ## SavedVariablesPerCharacter: RCombatMeterDB
 Locale.lua

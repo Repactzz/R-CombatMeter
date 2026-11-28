@@ -1,4 +1,4 @@
-R-CombatMeter  |  v1.0.9
+R-CombatMeter  |  v1.0.10
 WoW Forever 1.60.1 / Interface 16001
 ==================================
 
